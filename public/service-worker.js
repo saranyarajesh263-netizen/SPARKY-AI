@@ -2,23 +2,14 @@ const CACHE_NAME = 'sparky-ai-cache-v1';
 const urlsToCache = [
   '/',
   '/index.html',
-  '/index.tsx',
-  '/App.tsx',
-  '/types.ts',
   '/vite.svg',
-  '/services/geminiService.ts',
-  '/services/notesStorage.ts',
-  '/components/BottomNav.tsx',
-  '/components/CreateScreen.tsx',
-  '/components/HomeScreen.tsx',
-  '/components/NotesScreen.tsx',
-  '/components/PlayScreen.tsx',
-  '/components/SettingsScreen.tsx',
-  '/components/Toast.tsx',
-  '/components/icons.tsx'
+  '/icons/icon-192.svg',
+  '/icons/icon-512.svg'
 ];
 
 self.addEventListener('install', event => {
+  // Activate immediately after install
+  self.skipWaiting();
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then(cache => {
@@ -29,47 +20,63 @@ self.addEventListener('install', event => {
 });
 
 self.addEventListener('fetch', event => {
-  // We only want to handle GET requests.
-  if (event.request.method !== 'GET') {
-    return;
-  }
-  
-  // For API calls, always go to the network.
+  if (event.request.method !== 'GET') return;
+
+  // Always go to network for API calls that match known patterns
   if (event.request.url.includes('generativelanguage.googleapis.com')) {
-      return fetch(event.request);
+    return; // let browser handle network
   }
 
-  event.respondWith(
-    caches.open(CACHE_NAME).then(cache => {
-      return cache.match(event.request).then(response => {
-        // Return from cache if found.
-        const fetchPromise = fetch(event.request).then(networkResponse => {
+  // Handle SPA navigation requests: serve index.html if offline
+  if (event.request.mode === 'navigate' ||
+      (event.request.method === 'GET' && event.request.headers.get('accept')?.includes('text/html'))) {
+    event.respondWith(
+      caches.open(CACHE_NAME).then(cache => {
+        return fetch(event.request)
+          .then(networkResponse => {
             if (networkResponse && networkResponse.status === 200) {
               cache.put(event.request, networkResponse.clone());
             }
             return networkResponse;
-        });
+          })
+          .catch(() => {
+            return cache.match('/index.html');
+          });
+      })
+    );
+    return;
+  }
 
-        // Return from cache, or wait for network
+  // For other assets: try cache first, fall back to network and update cache
+  event.respondWith(
+    caches.open(CACHE_NAME).then(cache => {
+      return cache.match(event.request).then(response => {
+        const fetchPromise = fetch(event.request)
+          .then(networkResponse => {
+            if (networkResponse && networkResponse.status === 200) {
+              try { cache.put(event.request, networkResponse.clone()); } catch (e) { /* opaque responses may throw */ }
+            }
+            return networkResponse;
+          })
+          .catch(() => response);
+
         return response || fetchPromise;
       });
     })
   );
 });
 
-
-// Clean up old caches
 self.addEventListener('activate', event => {
-  const cacheWhitelist = [CACHE_NAME];
-  event.waitUntil(
-    caches.keys().then(cacheNames => {
-      return Promise.all(
-        cacheNames.map(cacheName => {
-          if (cacheWhitelist.indexOf(cacheName) === -1) {
-            return caches.delete(cacheName);
-          }
-        })
-      );
-    })
-  );
+  event.waitUntil((async () => {
+    self.clients?.claim?.();
+    const cacheWhitelist = [CACHE_NAME];
+    const cacheNames = await caches.keys();
+    await Promise.all(
+      cacheNames.map(cacheName => {
+        if (!cacheWhitelist.includes(cacheName)) {
+          return caches.delete(cacheName);
+        }
+      })
+    );
+  })());
 });
